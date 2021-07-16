@@ -4,6 +4,7 @@
 #include "js_native_api_v8.h"
 #include "memory_tracker-inl.h"
 #include "node_api.h"
+#include "node_api_internals.h"
 #include "node_binding.h"
 #include "node_buffer.h"
 #include "node_errors.h"
@@ -15,51 +16,36 @@
 #include <atomic>
 #include <memory>
 
-struct node_napi_env__ : public napi_env__ {
-  explicit node_napi_env__(v8::Local<v8::Context> context,
-                           const std::string& module_filename):
-      napi_env__(context), filename(module_filename) {
-    CHECK_NOT_NULL(node_env());
-  }
+node_napi_env__::node_napi_env__(v8::Local<v8::Context> context,
+                                 const std::string& module_filename)
+    : napi_env__(context), filename(module_filename) {
+  CHECK_NOT_NULL(node_env());
+}
 
-  inline node::Environment* node_env() const {
-    return node::Environment::GetCurrent(context());
-  }
+bool node_napi_env__::can_call_into_js() const {
+  return node_env()->can_call_into_js();
+}
 
-  bool can_call_into_js() const override {
-    return node_env()->can_call_into_js();
-  }
+v8::Maybe<bool> node_napi_env__::mark_arraybuffer_as_untransferable(
+    v8::Local<v8::ArrayBuffer> ab) const {
+  return ab->SetPrivate(context(),
+                        node_env()->untransferable_object_private_symbol(),
+                        v8::True(isolate));
+}
 
-  v8::Maybe<bool> mark_arraybuffer_as_untransferable(
-      v8::Local<v8::ArrayBuffer> ab) const override {
-    return ab->SetPrivate(
-        context(),
-        node_env()->untransferable_object_private_symbol(),
-        v8::True(isolate));
-  }
-
-  void CallFinalizer(napi_finalize cb, void* data, void* hint) override {
-    // we need to keep the env live until the finalizer has been run
-    // EnvRefHolder provides an exception safe wrapper to Ref and then
-    // Unref once the lamba is freed
-    EnvRefHolder liveEnv(static_cast<napi_env>(this));
-    node_env()->SetImmediate([=, liveEnv = std::move(liveEnv)]
-        (node::Environment* node_env) {
-      napi_env env = liveEnv.env();
-      v8::HandleScope handle_scope(env->isolate);
-      v8::Context::Scope context_scope(env->context());
-      env->CallIntoModule([&](napi_env env) {
-        cb(env, data, hint);
+void node_napi_env__::CallFinalizer(napi_finalize cb, void* data, void* hint) {
+  // we need to keep the env live until the finalizer has been run
+  // EnvRefHolder provides an exception safe wrapper to Ref and then
+  // Unref once the lamba is freed
+  EnvRefHolder liveEnv(static_cast<napi_env>(this));
+  node_env()->SetImmediate(
+      [=, liveEnv = std::move(liveEnv)](node::Environment* node_env) {
+        napi_env env = liveEnv.env();
+        v8::HandleScope handle_scope(env->isolate);
+        v8::Context::Scope context_scope(env->context());
+        env->CallIntoModule([&](napi_env env) { cb(env, data, hint); });
       });
-    });
-  }
-
-  const char* GetFilename() const { return filename.c_str(); }
-
-  std::string filename;
-};
-
-typedef node_napi_env__* node_napi_env;
+}
 
 namespace v8impl {
 
@@ -698,7 +684,8 @@ struct napi_async_cleanup_hook_handle__ {
   }
 
   static void Hook(void* data, void (*done_cb)(void*), void* done_data) {
-    auto handle = static_cast<napi_async_cleanup_hook_handle__*>(data);
+    napi_async_cleanup_hook_handle__* handle =
+        static_cast<napi_async_cleanup_hook_handle__*>(data);
     handle->done_cb_ = done_cb;
     handle->done_data_ = done_data;
     handle->user_hook_(handle, handle->user_data_);
@@ -832,7 +819,7 @@ napi_status napi_async_init(napi_env env,
   v8::Local<v8::String> v8_resource_name;
   CHECK_TO_STRING(env, context, v8_resource_name, async_resource_name);
 
-  auto async_context =
+  v8impl::AsyncContext* async_context =
       new v8impl::AsyncContext(reinterpret_cast<node_napi_env>(env),
                                v8_resource,
                                v8_resource_name,
@@ -888,7 +875,7 @@ napi_status napi_make_callback(napi_env env,
         reinterpret_cast<v8::Local<v8::Value>*>(const_cast<napi_value*>(argv)),
         {0, 0});
   } else {
-    auto node_async_context =
+    v8impl::AsyncContext* node_async_context =
         reinterpret_cast<v8impl::AsyncContext*>(async_context);
     callback_result = node_async_context->MakeCallback(
         v8recv,
@@ -917,7 +904,7 @@ napi_status napi_create_buffer(napi_env env,
   NAPI_PREAMBLE(env);
   CHECK_ARG(env, result);
 
-  auto maybe = node::Buffer::New(env->isolate, length);
+  v8::MaybeLocal<v8::Object> maybe = node::Buffer::New(env->isolate, length);
 
   CHECK_MAYBE_EMPTY(env, maybe, napi_generic_failure);
 
@@ -948,11 +935,12 @@ napi_status napi_create_external_buffer(napi_env env,
       env, finalize_cb, nullptr, finalize_hint,
       v8impl::Finalizer::kKeepEnvReference);
 
-  auto maybe = node::Buffer::New(isolate,
-                                static_cast<char*>(data),
-                                length,
-                                v8impl::BufferFinalizer::FinalizeBufferCallback,
-                                finalizer);
+  v8::MaybeLocal<v8::Object> maybe = node::Buffer::New(
+      isolate,
+      static_cast<char*>(data),
+      length,
+      v8impl::BufferFinalizer::FinalizeBufferCallback,
+      finalizer);
 
   CHECK_MAYBE_EMPTY(env, maybe, napi_generic_failure);
 
@@ -972,8 +960,9 @@ napi_status napi_create_buffer_copy(napi_env env,
   NAPI_PREAMBLE(env);
   CHECK_ARG(env, result);
 
-  auto maybe = node::Buffer::Copy(env->isolate,
-    static_cast<const char*>(data), length);
+  v8::MaybeLocal<v8::Object> maybe = node::Buffer::Copy(
+      env->isolate,
+      static_cast<const char*>(data), length);
 
   CHECK_MAYBE_EMPTY(env, maybe, napi_generic_failure);
 

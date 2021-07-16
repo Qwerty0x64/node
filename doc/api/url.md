@@ -942,6 +942,9 @@ invalid domain, the empty string is returned.
 
 It performs the inverse operation to [`url.domainToUnicode()`][].
 
+This feature is only available if the `node` executable was compiled with
+[ICU][] enabled. If not, the domain names are passed through unchanged.
+
 ```mjs
 import url from 'url';
 
@@ -978,6 +981,9 @@ Returns the Unicode serialization of the `domain`. If `domain` is an invalid
 domain, the empty string is returned.
 
 It performs the inverse operation to [`url.domainToASCII()`][].
+
+This feature is only available if the `node` executable was compiled with
+[ICU][] enabled. If not, the domain names are passed through unchanged.
 
 ```mjs
 import url from 'url';
@@ -1602,8 +1608,8 @@ console.log(myURL.origin);
 
 [ICU]: intl.md#intl_options_for_building_node_js
 [Punycode]: https://tools.ietf.org/html/rfc5891#section-4.4
-[WHATWG URL Standard]: https://url.spec.whatwg.org/
 [WHATWG URL]: #url_the_whatwg_url_api
+[WHATWG URL Standard]: https://url.spec.whatwg.org/
 [`Error`]: errors.md#errors_class_error
 [`JSON.stringify()`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify
 [`Map`]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map

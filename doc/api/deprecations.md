@@ -1799,7 +1799,7 @@ Assigning properties to the top-level `this` as an alternative
 to `module.exports` is deprecated. Developers should use `exports`
 or `module.exports` instead.
 
-### DEP0093: `crypto.fips` is deprecated and replaced.
+### DEP0093: `crypto.fips` is deprecated and replaced
 <!-- YAML
 changes:
   - version: v10.0.0
@@ -1812,7 +1812,7 @@ Type: Documentation-only
 The [`crypto.fips`][] property is deprecated. Please use `crypto.setFips()`
 and `crypto.getFips()` instead.
 
-### DEP0094: Using `assert.fail()` with more than one argument.
+### DEP0094: Using `assert.fail()` with more than one argument
 <!-- YAML
 changes:
   - version: v10.0.0
@@ -1932,7 +1932,7 @@ Type: End-of-Life
 
 The `--with-lttng` compile-time option has been removed.
 
-### DEP0102: Using `noAssert` in `Buffer#(read|write)` operations.
+### DEP0102: Using `noAssert` in `Buffer#(read|write)` operations
 <!-- YAML
 changes:
   - version: v10.0.0
@@ -2502,7 +2502,7 @@ is flushed.
 Use [`response.writableFinished`][] or [`response.writableEnded`][]
 accordingly instead to avoid the ambiguity.
 
-To maintain existing behaviour `response.finished` should be replaced with
+To maintain existing behavior `response.finished` should be replaced with
 `response.writableEnded`.
 
 ### DEP0137: Closing fs.FileHandle on garbage collection
@@ -2807,7 +2807,7 @@ deprecated and should no longer be used.
 [`SlowBuffer`]: buffer.md#buffer_class_slowbuffer
 [`WriteStream.open()`]: fs.md#fs_class_fs_writestream
 [`assert`]: assert.md
-[`asyncResource.runInAsyncScope()`]: async_hooks.md#async_hooks_asyncresource_runinasyncscope_fn_thisarg_args
+[`asyncResource.runInAsyncScope()`]: async_context.md#async_context_asyncresource_runinasyncscope_fn_thisarg_args
 [`child_process`]: child_process.md
 [`clearInterval()`]: timers.md#timers_clearinterval_timeout
 [`clearTimeout()`]: timers.md#timers_cleartimeout_timeout

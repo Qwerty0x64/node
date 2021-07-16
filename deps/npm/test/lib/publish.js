@@ -1,5 +1,5 @@
 const t = require('tap')
-const mockNpm = require('../fixtures/mock-npm')
+const { fake: mockNpm } = require('../fixtures/mock-npm')
 const fs = require('fs')
 
 // The way we set loglevel is kind of convoluted, and there is no way to affect
@@ -538,12 +538,12 @@ t.test('workspaces', (t) => {
         repository: 'https://github.com/npm/workspace-b',
       }),
     },
-    'workspace-c': JSON.stringify({
-      'package.json': {
+    'workspace-c': {
+      'package.json': JSON.stringify({
         name: 'workspace-n',
         version: '1.2.3-n',
-      },
-    }),
+      }),
+    },
   })
 
   const publishes = []
@@ -615,5 +615,150 @@ t.test('workspaces', (t) => {
       t.end()
     })
   })
+  t.end()
+})
+
+t.test('private workspaces', (t) => {
+  const testDir = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'workspaces-project',
+      version: '1.0.0',
+      workspaces: ['packages/*'],
+    }),
+    packages: {
+      a: {
+        'package.json': JSON.stringify({
+          name: '@npmcli/a',
+          version: '1.0.0',
+          private: true,
+        }),
+      },
+      b: {
+        'package.json': JSON.stringify({
+          name: '@npmcli/b',
+          version: '1.0.0',
+        }),
+      },
+    },
+  })
+
+  const publishes = []
+  const outputs = []
+  t.beforeEach(() => {
+    npm.config.set('json', false)
+    outputs.length = 0
+    publishes.length = 0
+  })
+  const mocks = {
+    '../../lib/utils/tar.js': {
+      getContents: (manifest) => ({
+        id: manifest._id,
+      }),
+      logTar: () => {},
+    },
+    libnpmpublish: {
+      publish: (manifest, tarballData, opts) => {
+        if (manifest.private) {
+          throw Object.assign(
+            new Error('private pkg'),
+            { code: 'EPRIVATE' }
+          )
+        }
+        publishes.push(manifest)
+      },
+    },
+  }
+  const npm = mockNpm({
+    output: (o) => {
+      outputs.push(o)
+    },
+  })
+  npm.localPrefix = testDir
+  npm.config.getCredentialsByURI = (uri) => {
+    return { token: 'some.registry.token' }
+  }
+
+  t.test('with color', t => {
+    const Publish = t.mock('../../lib/publish.js', {
+      ...mocks,
+      npmlog: {
+        notice () {},
+        verbose () {},
+        warn (title, msg) {
+          t.equal(title, 'publish', 'should use publish warn title')
+          t.match(
+            msg,
+            'Skipping workspace \u001b[32m@npmcli/a\u001b[39m, marked as \u001b[1mprivate\u001b[22m',
+            'should display skip private workspace warn msg'
+          )
+        },
+      },
+    })
+    const publish = new Publish(npm)
+
+    npm.color = true
+    publish.execWorkspaces([], [], (err) => {
+      t.notOk(err)
+      t.matchSnapshot(publishes, 'should publish all non-private workspaces')
+      t.matchSnapshot(outputs, 'should output all publishes')
+      npm.color = false
+      t.end()
+    })
+  })
+
+  t.test('colorless', t => {
+    const Publish = t.mock('../../lib/publish.js', {
+      ...mocks,
+      npmlog: {
+        notice () {},
+        verbose () {},
+        warn (title, msg) {
+          t.equal(title, 'publish', 'should use publish warn title')
+          t.equal(
+            msg,
+            'Skipping workspace @npmcli/a, marked as private',
+            'should display skip private workspace warn msg'
+          )
+        },
+      },
+    })
+    const publish = new Publish(npm)
+
+    publish.execWorkspaces([], [], (err) => {
+      t.notOk(err)
+      t.matchSnapshot(publishes, 'should publish all non-private workspaces')
+      t.matchSnapshot(outputs, 'should output all publishes')
+      t.end()
+    })
+  })
+
+  t.test('unexpected error', t => {
+    const Publish = t.mock('../../lib/publish.js', {
+      ...mocks,
+      libnpmpublish: {
+        publish: (manifest, tarballData, opts) => {
+          if (manifest.private)
+            throw new Error('ERR')
+
+          publishes.push(manifest)
+        },
+      },
+      npmlog: {
+        notice () {},
+        verbose () {},
+      },
+    })
+    const publish = new Publish(npm)
+
+    publish.execWorkspaces([], [], (err) => {
+      t.match(
+        err,
+        /ERR/,
+        'should throw unexpected error'
+      )
+      t.end()
+    })
+  })
+
   t.end()
 })

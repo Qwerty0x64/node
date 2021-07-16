@@ -3,7 +3,7 @@
 // of them contain the tap testdir folders, which are auto-generated and
 // may change when node-tap is updated.
 const t = require('tap')
-const mockNpm = require('../fixtures/mock-npm')
+const { fake: mockNpm } = require('../fixtures/mock-npm.js')
 
 const { resolve } = require('path')
 const { utimesSync } = require('fs')
@@ -90,7 +90,12 @@ const diffDepTypesNmFixture = {
 }
 
 let result = ''
-const LS = require('../../lib/ls.js')
+const LS = t.mock('../../lib/ls.js', {
+  path: {
+    ...require('path'),
+    sep: '/',
+  },
+})
 const config = {
   all: true,
   color: false,
@@ -102,6 +107,7 @@ const config = {
   only: null,
   parseable: false,
   production: false,
+  'package-lock-only': false,
 }
 const flatOptions = {
 }
@@ -117,7 +123,23 @@ const ls = new LS(npm)
 const redactCwd = res =>
   res && res.replace(/\\+/g, '/').replace(new RegExp(__dirname.replace(/\\+/g, '/'), 'gi'), '{CWD}')
 
-const jsonParse = res => JSON.parse(redactCwd(res))
+const redactCwdObj = obj => {
+  if (Array.isArray(obj))
+    return obj.map(o => redactCwdObj(o))
+  else if (typeof obj === 'string')
+    return redactCwd(obj)
+  else if (!obj)
+    return obj
+  else if (typeof obj === 'object') {
+    return Object.keys(obj).reduce((o, k) => {
+      o[k] = redactCwdObj(obj[k])
+      return o
+    }, {})
+  } else
+    return obj
+}
+
+const jsonParse = res => redactCwdObj(JSON.parse(res))
 
 const cleanUpResult = () => result = ''
 
@@ -1407,14 +1429,16 @@ t.test('ls', (t) => {
     })
   })
 
-  t.test('loading a tree containing workspaces', (t) => {
-    npm.prefix = t.testdir({
+  t.test('loading a tree containing workspaces', async (t) => {
+    npm.localPrefix = npm.prefix = t.testdir({
       'package.json': JSON.stringify({
-        name: 'filter-by-child-of-missing-dep',
+        name: 'workspaces-tree',
         version: '1.0.0',
         workspaces: [
           './a',
           './b',
+          './d',
+          './group/*',
         ],
       }),
       node_modules: {
@@ -1426,6 +1450,24 @@ t.test('ls', (t) => {
             version: '1.0.0',
           }),
         },
+        d: t.fixture('symlink', '../d'),
+        e: t.fixture('symlink', '../group/e'),
+        f: t.fixture('symlink', '../group/f'),
+        foo: {
+          'package.json': JSON.stringify({
+            name: 'foo',
+            version: '1.1.1',
+            dependencies: {
+              bar: '^1.0.0',
+            },
+          }),
+        },
+        bar: {
+          'package.json': JSON.stringify({ name: 'bar', version: '1.0.0' }),
+        },
+        baz: {
+          'package.json': JSON.stringify({ name: 'baz', version: '1.0.0' }),
+        },
       },
       a: {
         'package.json': JSON.stringify({
@@ -1433,6 +1475,10 @@ t.test('ls', (t) => {
           version: '1.0.0',
           dependencies: {
             c: '^1.0.0',
+            d: '^1.0.0',
+          },
+          devDependencies: {
+            baz: '^1.0.0',
           },
         }),
       },
@@ -1442,18 +1488,119 @@ t.test('ls', (t) => {
           version: '1.0.0',
         }),
       },
+      d: {
+        'package.json': JSON.stringify({
+          name: 'd',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.1.1',
+          },
+        }),
+      },
+      group: {
+        e: {
+          'package.json': JSON.stringify({
+            name: 'e',
+            version: '1.0.0',
+          }),
+        },
+        f: {
+          'package.json': JSON.stringify({
+            name: 'f',
+            version: '1.0.0',
+          }),
+        },
+      },
     })
 
-    ls.exec([], (err) => {
-      t.error(err, 'should NOT have ELSPROBLEMS error code')
-      t.matchSnapshot(redactCwd(result), 'should list workspaces properly')
+    await new Promise((res, rej) => {
+      config.all = false
+      config.depth = 0
+      npm.color = true
+      ls.exec([], (err) => {
+        if (err)
+          rej(err)
 
-      // should also be able to filter out one of the workspaces
-      ls.exec(['a'], (err) => {
-        t.error(err, 'should NOT have ELSPROBLEMS error code when filter')
+        t.matchSnapshot(redactCwd(result),
+          'should list workspaces properly with default configs')
+        config.all = true
+        config.depth = Infinity
+        npm.color = false
+        res()
+      })
+    })
+
+    // --all
+    await new Promise((res, rej) => {
+      ls.exec([], (err) => {
+        if (err)
+          rej(err)
+
+        t.matchSnapshot(redactCwd(result),
+          'should list --all workspaces properly')
+        res()
+      })
+    })
+
+    // --production
+    await new Promise((res, rej) => {
+      config.production = true
+      ls.exec([], (err) => {
+        if (err)
+          rej(err)
+
+        t.matchSnapshot(redactCwd(result),
+          'should list only prod deps of workspaces')
+
+        config.production = false
+        res()
+      })
+    })
+
+    // filter out a single workspace using args
+    await new Promise((res, rej) => {
+      ls.exec(['d'], (err) => {
+        if (err)
+          rej(err)
+
         t.matchSnapshot(redactCwd(result), 'should filter single workspace')
+        res()
+      })
+    })
 
-        t.end()
+    // filter out a single workspace and its deps using workspaces filters
+    await new Promise((res, rej) => {
+      ls.execWorkspaces([], ['a'], (err) => {
+        if (err)
+          rej(err)
+
+        t.matchSnapshot(redactCwd(result),
+          'should filter using workspace config')
+        res()
+      })
+    })
+
+    // filter out a workspace by parent path
+    await new Promise((res, rej) => {
+      ls.execWorkspaces([], ['./group'], (err) => {
+        if (err)
+          rej(err)
+
+        t.matchSnapshot(redactCwd(result),
+          'should filter by parent folder workspace config')
+        res()
+      })
+    })
+
+    // filter by a dep within a workspaces sub tree
+    await new Promise((res, rej) => {
+      ls.execWorkspaces(['bar'], ['d'], (err) => {
+        if (err)
+          rej(err)
+
+        t.matchSnapshot(redactCwd(result),
+          'should print all tree and filter by dep within only the ws subtree')
+        res()
       })
     })
   })
@@ -2929,7 +3076,7 @@ t.test('ls --json', (t) => {
           dependencies: {
             foo: {
               version: '1.0.0',
-              invalid: true,
+              invalid: '"^2.0.0" from the root project',
               problems: [
                 'invalid: foo@1.0.0 {CWD}/tap-testdir-ls-ls---json-missing-invalid-extraneous/node_modules/foo',
               ],
@@ -3625,7 +3772,7 @@ t.test('ls --json', (t) => {
           dependencies: {
             'peer-dep': {
               version: '1.0.0',
-              invalid: true,
+              invalid: '"^2.0.0" from the root project',
               problems: [
                 'invalid: peer-dep@1.0.0 {CWD}/tap-testdir-ls-ls---json-unmet-peer-dep/node_modules/peer-dep',
               ],
@@ -3686,7 +3833,7 @@ t.test('ls --json', (t) => {
           dependencies: {
             'optional-dep': {
               version: '1.0.0',
-              invalid: true,
+              invalid: '"^2.0.0" from the root project',
               problems: [
                 'invalid: optional-dep@1.0.0 {CWD}/tap-testdir-ls-ls---json-unmet-optional-dep/node_modules/optional-dep',
               ],
@@ -4039,6 +4186,844 @@ t.test('ls --json', (t) => {
       config.global = false
       t.end()
     })
+  })
+
+  t.end()
+})
+
+t.test('show multiple invalid reasons', (t) => {
+  config.json = false
+  config.all = true
+  config.depth = Infinity
+  npm.prefix = t.testdir({
+    'package.json': JSON.stringify({
+      name: 'test-npm-ls',
+      version: '1.0.0',
+      dependencies: {
+        cat: '^2.0.0',
+        dog: '^1.2.3',
+      },
+    }),
+    node_modules: {
+      cat: {
+        'package.json': JSON.stringify({
+          name: 'cat',
+          version: '1.0.0',
+          dependencies: {
+            dog: '^2.0.0',
+          },
+        }),
+      },
+      dog: {
+        'package.json': JSON.stringify({
+          name: 'dog',
+          version: '1.0.0',
+          dependencies: {
+            cat: '',
+          },
+        }),
+      },
+      chai: {
+        'package.json': JSON.stringify({
+          name: 'chai',
+          version: '1.0.0',
+          dependencies: {
+            dog: '2.x',
+          },
+        }),
+      },
+    },
+  })
+
+  const cleanupPaths = str =>
+    redactCwd(str).toLowerCase().replace(/\\/g, '/')
+  ls.exec([], (err) => {
+    t.match(err, { code: 'ELSPROBLEMS' }, 'should list dep problems')
+    t.matchSnapshot(cleanupPaths(result), 'ls result')
+    t.end()
+  })
+})
+
+t.test('ls --package-lock-only', (t) => {
+  config['package-lock-only'] = true
+  t.test('ls --package-lock-only --json', (t) => {
+    t.beforeEach(cleanUpResult)
+    config.json = true
+    config.parseable = false
+    t.test('no args', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+                dependencies: {
+                  dog: {
+                    version: '1.0.0',
+                  },
+                },
+              },
+              chai: {
+                version: '1.0.0',
+              },
+            },
+          },
+          'should output json representation of dependencies structure'
+        )
+        t.end()
+      })
+    })
+
+    t.test('extraneous deps', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.error(err) // should not error for extraneous
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+                dependencies: {
+                  dog: {
+                    version: '1.0.0',
+                  },
+                },
+              },
+            },
+          },
+          'should output json containing no problem info'
+        )
+        t.end()
+      })
+    })
+
+    t.test('missing deps --long', (t) => {
+      config.long = true
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            dog: '^1.0.0',
+            chai: '^1.0.0',
+            ipsum: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+            ipsum: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.error(err, 'npm ls')
+        t.match(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+          },
+          'should output json containing no problems info'
+        )
+        config.long = false
+        t.end()
+      })
+    })
+
+    t.test('with filter arg', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+            ipsum: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec(['chai'], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              chai: {
+                version: '1.0.0',
+              },
+            },
+          },
+          'should output json contaning only occurrences of filtered by package'
+        )
+        t.equal(
+          process.exitCode,
+          0,
+          'should exit with error code 0'
+        )
+        t.end()
+      })
+    })
+
+    t.test('with filter arg nested dep', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+            ipsum: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec(['dog'], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+                dependencies: {
+                  dog: {
+                    version: '1.0.0',
+                  },
+                },
+              },
+            },
+          },
+          'should output json contaning only occurrences of filtered by package'
+        )
+        t.end()
+      })
+    })
+
+    t.test('with multiple filter args', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+            ipsum: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+            ipsum: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec(['dog@*', 'chai@1.0.0'], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            version: '1.0.0',
+            name: 'test-npm-ls',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+                dependencies: {
+                  dog: {
+                    version: '1.0.0',
+                  },
+                },
+              },
+              chai: {
+                version: '1.0.0',
+              },
+            },
+          },
+          'should output json contaning only occurrences of multiple filtered packages and their ancestors'
+        )
+        t.end()
+      })
+    })
+
+    t.test('with missing filter arg', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec(['notadep'], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+          },
+          'should output json containing no dependencies info'
+        )
+        t.equal(
+          process.exitCode,
+          1,
+          'should exit with error code 1'
+        )
+        process.exitCode = 0
+        t.end()
+      })
+    })
+
+    t.test('default --depth value should now be 0', (t) => {
+      config.all = false
+      config.depth = undefined
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+              },
+              chai: {
+                version: '1.0.0',
+              },
+            },
+          },
+          'should output json containing only top-level dependencies'
+        )
+        config.all = true
+        config.depth = Infinity
+        t.end()
+      })
+    })
+
+    t.test('--depth=0', (t) => {
+      config.all = false
+      config.depth = 0
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+              },
+              chai: {
+                version: '1.0.0',
+              },
+            },
+          },
+          'should output json containing only top-level dependencies'
+        )
+        config.all = true
+        config.depth = Infinity
+        t.end()
+      })
+    })
+
+    t.test('--depth=1', (t) => {
+      config.all = false
+      config.depth = 1
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^1.0.0',
+            chai: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.error(err, 'npm ls')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+                dependencies: {
+                  dog: {
+                    version: '1.0.0',
+                  },
+                },
+              },
+              chai: {
+                version: '1.0.0',
+              },
+            },
+          },
+          'should output json containing top-level deps and their deps only'
+        )
+        config.all = true
+        config.depth = Infinity
+        t.end()
+      })
+    })
+
+    t.test('missing/invalid/extraneous', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            foo: '^2.0.0',
+            ipsum: '^1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            foo: {
+              version: '1.0.0',
+              requires: {
+                dog: '^1.0.0',
+              },
+            },
+            dog: {
+              version: '1.0.0',
+            },
+            chai: {
+              version: '1.0.0',
+            },
+          },
+        }),
+      })
+      ls.exec([], (err) => {
+        t.match(err, { code: 'ELSPROBLEMS' }, 'should list dep problems')
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            problems: [
+              'invalid: foo@1.0.0 {CWD}/tap-testdir-ls-ls---package-lock-only-ls---package-lock-only---json-missing-invalid-extraneous/node_modules/foo',
+              'missing: ipsum@^1.0.0, required by test-npm-ls@1.0.0',
+            ],
+            dependencies: {
+              foo: {
+                version: '1.0.0',
+                invalid: '"^2.0.0" from the root project',
+                problems: [
+                  'invalid: foo@1.0.0 {CWD}/tap-testdir-ls-ls---package-lock-only-ls---package-lock-only---json-missing-invalid-extraneous/node_modules/foo',
+                ],
+                dependencies: {
+                  dog: {
+                    version: '1.0.0',
+                  },
+                },
+              },
+              ipsum: {
+                required: '^1.0.0',
+                missing: true,
+                problems: [
+                  'missing: ipsum@^1.0.0, required by test-npm-ls@1.0.0',
+                ],
+              },
+            },
+          },
+          'should output json containing top-level deps and their deps only'
+        )
+        t.end()
+      })
+    })
+
+    t.test('from lockfile', (t) => {
+      npm.prefix = t.testdir({
+        'package-lock.json': JSON.stringify({
+          name: 'dedupe-lockfile',
+          version: '1.0.0',
+          lockfileVersion: 2,
+          requires: true,
+          packages: {
+            '': {
+              name: 'dedupe-lockfile',
+              version: '1.0.0',
+              dependencies: {
+                '@isaacs/dedupe-tests-a': '1.0.1',
+                '@isaacs/dedupe-tests-b': '1||2',
+              },
+            },
+            'node_modules/@isaacs/dedupe-tests-a': {
+              name: '@isaacs/dedupe-tests-a',
+              version: '1.0.1',
+              resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-a/-/dedupe-tests-a-1.0.1.tgz',
+              integrity: 'sha512-8AN9lNCcBt5Xeje7fMEEpp5K3rgcAzIpTtAjYb/YMUYu8SbIVF6wz0WqACDVKvpQOUcSfNHZQNLNmue0QSwXOQ==',
+              dependencies: {
+                '@isaacs/dedupe-tests-b': '1',
+              },
+            },
+            'node_modules/@isaacs/dedupe-tests-a/node_modules/@isaacs/dedupe-tests-b': {
+              name: '@isaacs/dedupe-tests-b',
+              version: '1.0.0',
+              resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-b/-/dedupe-tests-b-1.0.0.tgz',
+              integrity: 'sha512-3nmvzIb8QL8OXODzipwoV3U8h9OQD9g9RwOPuSBQqjqSg9JZR1CCFOWNsDUtOfmwY8HFUJV9EAZ124uhqVxq+w==',
+            },
+            'node_modules/@isaacs/dedupe-tests-b': {
+              name: '@isaacs/dedupe-tests-b',
+              version: '2.0.0',
+              resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-b/-/dedupe-tests-b-2.0.0.tgz',
+              integrity: 'sha512-KTYkpRv9EzlmCg4Gsm/jpclWmRYFCXow8GZKJXjK08sIZBlElTZEa5Bw/UQxIvEfcKmWXczSqItD49Kr8Ax4UA==',
+            },
+          },
+          dependencies: {
+            '@isaacs/dedupe-tests-a': {
+              version: '1.0.1',
+              resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-a/-/dedupe-tests-a-1.0.1.tgz',
+              integrity: 'sha512-8AN9lNCcBt5Xeje7fMEEpp5K3rgcAzIpTtAjYb/YMUYu8SbIVF6wz0WqACDVKvpQOUcSfNHZQNLNmue0QSwXOQ==',
+              requires: {
+                '@isaacs/dedupe-tests-b': '1',
+              },
+              dependencies: {
+                '@isaacs/dedupe-tests-b': {
+                  version: '1.0.0',
+                  resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-b/-/dedupe-tests-b-1.0.0.tgz',
+                  integrity: 'sha512-3nmvzIb8QL8OXODzipwoV3U8h9OQD9g9RwOPuSBQqjqSg9JZR1CCFOWNsDUtOfmwY8HFUJV9EAZ124uhqVxq+w==',
+                },
+              },
+            },
+            '@isaacs/dedupe-tests-b': {
+              version: '2.0.0',
+              resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-b/-/dedupe-tests-b-2.0.0.tgz',
+              integrity: 'sha512-KTYkpRv9EzlmCg4Gsm/jpclWmRYFCXow8GZKJXjK08sIZBlElTZEa5Bw/UQxIvEfcKmWXczSqItD49Kr8Ax4UA==',
+            },
+          },
+        }),
+        'package.json': JSON.stringify({
+          name: 'dedupe-lockfile',
+          version: '1.0.0',
+          dependencies: {
+            '@isaacs/dedupe-tests-a': '1.0.1',
+            '@isaacs/dedupe-tests-b': '1||2',
+          },
+        }),
+      })
+      ls.exec([], () => {
+        t.same(
+          jsonParse(result),
+          {
+            version: '1.0.0',
+            name: 'dedupe-lockfile',
+            dependencies: {
+              '@isaacs/dedupe-tests-a': {
+                version: '1.0.1',
+                resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-a/-/dedupe-tests-a-1.0.1.tgz',
+                dependencies: {
+                  '@isaacs/dedupe-tests-b': {
+                    version: '1.0.0',
+                    resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-b/-/dedupe-tests-b-1.0.0.tgz',
+                  },
+                },
+              },
+              '@isaacs/dedupe-tests-b': {
+                version: '2.0.0',
+                resolved: 'https://registry.npmjs.org/@isaacs/dedupe-tests-b/-/dedupe-tests-b-2.0.0.tgz',
+              },
+            },
+          },
+          'should output json containing only prod deps'
+        )
+        t.end()
+      })
+    })
+
+    t.test('using aliases', (t) => {
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            a: 'npm:b@1.0.0',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          dependencies: {
+            a: {
+              version: 'npm:b@1.0.0',
+              resolved: 'https://localhost:8080/abbrev/-/abbrev-1.0.0.tgz',
+            },
+          },
+        }),
+      })
+      ls.exec([], () => {
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              a: {
+                version: '1.0.0',
+                resolved: 'https://localhost:8080/abbrev/-/abbrev-1.0.0.tgz',
+              },
+            },
+          },
+          'should output json containing aliases'
+        )
+        t.end()
+      })
+    })
+
+    t.test('resolved points to git ref', (t) => {
+      config.long = false
+      npm.prefix = t.testdir({
+        'package.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          dependencies: {
+            abbrev: 'git+https://github.com/isaacs/abbrev-js.git',
+          },
+        }),
+        'package-lock.json': JSON.stringify({
+          name: 'test-npm-ls',
+          version: '1.0.0',
+          lockfileVersion: 2,
+          requires: true,
+          dependencies: {
+            abbrev: {
+              version: 'git+ssh://git@github.com/isaacs/abbrev-js.git#b8f3a2fc0c3bb8ffd8b0d0072cc6b5a3667e963c',
+              from: 'abbrev@git+https://github.com/isaacs/abbrev-js.git',
+            },
+          },
+        }
+        ),
+      })
+      ls.exec([], () => {
+        t.same(
+          jsonParse(result),
+          {
+            name: 'test-npm-ls',
+            version: '1.0.0',
+            dependencies: {
+              abbrev: {
+                resolved: 'git+ssh://git@github.com/isaacs/abbrev-js.git#b8f3a2fc0c3bb8ffd8b0d0072cc6b5a3667e963c',
+              },
+            },
+          },
+          'should output json containing git refs'
+        )
+        t.end()
+      })
+    })
+
+    t.end()
   })
 
   t.end()

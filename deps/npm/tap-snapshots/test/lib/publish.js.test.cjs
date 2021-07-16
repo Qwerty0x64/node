@@ -5,8 +5,43 @@
  * Make sure to inspect the output below.  Do not ignore changes!
  */
 'use strict'
+exports[`test/lib/publish.js TAP private workspaces colorless > should output all publishes 1`] = `
+Array [
+  "+ @npmcli/b@1.0.0",
+]
+`
+
+exports[`test/lib/publish.js TAP private workspaces colorless > should publish all non-private workspaces 1`] = `
+Array [
+  Object {
+    "_id": "@npmcli/b@1.0.0",
+    "name": "@npmcli/b",
+    "readme": "ERROR: No README data found!",
+    "version": "1.0.0",
+  },
+]
+`
+
+exports[`test/lib/publish.js TAP private workspaces with color > should output all publishes 1`] = `
+Array [
+  "+ @npmcli/b@1.0.0",
+]
+`
+
+exports[`test/lib/publish.js TAP private workspaces with color > should publish all non-private workspaces 1`] = `
+Array [
+  Object {
+    "_id": "@npmcli/b@1.0.0",
+    "name": "@npmcli/b",
+    "readme": "ERROR: No README data found!",
+    "version": "1.0.0",
+  },
+]
+`
+
 exports[`test/lib/publish.js TAP shows usage with wrong set of arguments > should print usage 1`] = `
-npm publish
+Error: 
+Usage: npm publish
 
 Publish a package
 
@@ -14,17 +49,20 @@ Usage:
 npm publish [<folder>]
 
 Options:
-[--tag <tag>] [--access <restricted|public>] [--dry-run]
+[--tag <tag>] [--access <restricted|public>] [--dry-run] [--otp <otp>]
 [-w|--workspace <workspace-name> [-w|--workspace <workspace-name> ...]]
 [-ws|--workspaces]
 
-Run "npm help publish" for more info
+Run "npm help publish" for more info {
+  "code": "EUSAGE",
+}
 `
 
 exports[`test/lib/publish.js TAP workspaces all workspaces > should output all publishes 1`] = `
 Array [
   "+ workspace-a@1.2.3-a",
   "+ workspace-b@1.2.3-n",
+  "+ workspace-n@1.2.3-n",
 ]
 `
 
@@ -54,6 +92,12 @@ Array [
     },
     "version": "1.2.3-n",
   },
+  Object {
+    "_id": "workspace-n@1.2.3-n",
+    "name": "workspace-n",
+    "readme": "ERROR: No README data found!",
+    "version": "1.2.3-n",
+  },
 ]
 `
 
@@ -66,6 +110,9 @@ Array [
       },
       "workspace-b": {
         "id": "workspace-b@1.2.3-n"
+      },
+      "workspace-n": {
+        "id": "workspace-n@1.2.3-n"
       }
     }
   ),
@@ -96,6 +143,12 @@ Array [
       "type": "git",
       "url": "git+https://github.com/npm/workspace-b.git",
     },
+    "version": "1.2.3-n",
+  },
+  Object {
+    "_id": "workspace-n@1.2.3-n",
+    "name": "workspace-n",
+    "readme": "ERROR: No README data found!",
     "version": "1.2.3-n",
   },
 ]

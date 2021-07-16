@@ -49,7 +49,7 @@ t.test('arborist-cmd', async t => {
 
   // check filtering for a single workspace name
   cmd.exec = function (args, cb) {
-    t.same(this.workspaces, ['a'], 'should set array with single ws name')
+    t.same(this.workspaceNames, ['a'], 'should set array with single ws name')
     t.same(args, ['foo'], 'should get received args')
     cb()
   }
@@ -59,7 +59,7 @@ t.test('arborist-cmd', async t => {
 
   // check filtering single workspace by path
   cmd.exec = function (args, cb) {
-    t.same(this.workspaces, ['a'],
+    t.same(this.workspaceNames, ['a'],
       'should set array with single ws name from path')
     cb()
   }
@@ -69,7 +69,7 @@ t.test('arborist-cmd', async t => {
 
   // check filtering single workspace by full path
   cmd.exec = function (args, cb) {
-    t.same(this.workspaces, ['a'],
+    t.same(this.workspaceNames, ['a'],
       'should set array with single ws name from full path')
     cb()
   }
@@ -79,7 +79,7 @@ t.test('arborist-cmd', async t => {
 
   // filtering multiple workspaces by name
   cmd.exec = function (args, cb) {
-    t.same(this.workspaces, ['a', 'c'],
+    t.same(this.workspaceNames, ['a', 'c'],
       'should set array with multiple listed ws names')
     cb()
   }
@@ -89,7 +89,7 @@ t.test('arborist-cmd', async t => {
 
   // filtering multiple workspaces by path names
   cmd.exec = function (args, cb) {
-    t.same(this.workspaces, ['a', 'c'],
+    t.same(this.workspaceNames, ['a', 'c'],
       'should set array with multiple ws names from paths')
     cb()
   }
@@ -99,11 +99,27 @@ t.test('arborist-cmd', async t => {
 
   // filtering multiple workspaces by parent path name
   cmd.exec = function (args, cb) {
-    t.same(this.workspaces, ['c', 'd'],
+    t.same(this.workspaceNames, ['c', 'd'],
       'should set array with multiple ws names from a parent folder name')
     cb()
   }
   await new Promise(res => {
     cmd.execWorkspaces([], ['./group'], res)
+  })
+})
+
+t.test('handle getWorkspaces raising an error', t => {
+  const ArboristCmd = t.mock('../../../lib/workspaces/arborist-cmd.js', {
+    '../../../lib/workspaces/get-workspaces.js': async () => {
+      throw new Error('oopsie')
+    },
+  })
+  class TestCmd extends ArboristCmd {}
+  const cmd = new TestCmd()
+  cmd.npm = {}
+
+  cmd.execWorkspaces(['foo'], ['a'], er => {
+    t.match(er, { message: 'oopsie' })
+    t.end()
   })
 })

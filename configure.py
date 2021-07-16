@@ -45,6 +45,7 @@ import getmoduleversion
 import getnapibuildversion
 import getsharedopensslhasquic
 from gyp_node import run_gyp
+from utils import SearchFiles
 
 # parse our options
 parser = argparse.ArgumentParser()
@@ -173,7 +174,7 @@ parser.add_argument("--enable-lto",
     dest="enable_lto",
     default=None,
     help="Enable compiling with lto of a binary. This feature is only available "
-         "on linux with gcc and g++ 5.4.1 or newer.")
+         "with gcc 5.4.1+ or clang 3.9.1+.")
 
 parser.add_argument("--link-module",
     action="append",
@@ -952,6 +953,7 @@ def get_gas_version(cc):
 # quite prepared to go that far yet.
 def check_compiler(o):
   if sys.platform == 'win32':
+    o['variables']['llvm_version'] = '0.0'
     if not options.openssl_no_asm and options.dest_cpu in ('x86', 'x64'):
       nasm_version = get_nasm_version('nasm')
       o['variables']['nasm_version'] = nasm_version
@@ -1065,6 +1067,7 @@ def host_arch_cc():
     '__PPC__'     : 'ppc64',
     '__x86_64__'  : 'x64',
     '__s390x__'   : 's390x',
+    '__riscv'     : 'riscv',
   }
 
   rtn = 'ia32' # default
@@ -1076,6 +1079,12 @@ def host_arch_cc():
 
   if rtn == 'mipsel' and '_LP64' in k:
     rtn = 'mips64el'
+
+  if rtn == 'riscv':
+    if k['__riscv_xlen'] == '64':
+      rtn = 'riscv64'
+    else:
+      rtn = 'riscv32'
 
   return rtn
 
@@ -1131,15 +1140,24 @@ def configure_mips(o, target_arch):
   host_byteorder = 'little' if target_arch in ('mipsel', 'mips64el') else 'big'
   o['variables']['v8_host_byteorder'] = host_byteorder
 
+def clang_version_ge(version_checked):
+  for compiler in [(CC, 'c'), (CXX, 'c++')]:
+    ok, is_clang, clang_version, gcc_version = \
+      try_check_compiler(compiler[0], compiler[1])
+    if is_clang and clang_version >= version_checked:
+      return True
+  return False
 
 def gcc_version_ge(version_checked):
   for compiler in [(CC, 'c'), (CXX, 'c++')]:
-    ok, is_clang, clang_version, compiler_version = \
+    ok, is_clang, clang_version, gcc_version = \
       try_check_compiler(compiler[0], compiler[1])
-    if is_clang or compiler_version < version_checked:
+    if is_clang or gcc_version < version_checked:
       return False
   return True
 
+def configure_node_lib_files(o):
+  o['variables']['node_library_files'] = SearchFiles('lib', 'js')
 
 def configure_node(o):
   if options.dest_os == 'android':
@@ -1217,18 +1235,19 @@ def configure_node(o):
   o['variables']['enable_pgo_generate'] = b(options.enable_pgo_generate)
   o['variables']['enable_pgo_use']      = b(options.enable_pgo_use)
 
-  if flavor != 'linux' and (options.enable_lto):
+  if flavor == 'win' and (options.enable_lto):
     raise Exception(
-      'The lto option is supported only on linux.')
+      'Use Link Time Code Generation instead.')
 
-  if flavor == 'linux':
-    if options.enable_lto:
-      version_checked = (5, 4, 1)
-      if not gcc_version_ge(version_checked):
-        version_checked_str = ".".join(map(str, version_checked))
-        raise Exception(
-          'The option --enable-lto is supported for gcc and gxx %s'
-          ' or newer only.' % (version_checked_str))
+  if options.enable_lto:
+    gcc_version_checked = (5, 4, 1)
+    clang_version_checked = (3, 9, 1)
+    if not gcc_version_ge(gcc_version_checked) and not clang_version_ge(clang_version_checked):
+      gcc_version_checked_str = ".".join(map(str, gcc_version_checked))
+      clang_version_checked_str = ".".join(map(str, clang_version_checked))
+      raise Exception(
+        'The option --enable-lto is supported for gcc %s+'
+        'or clang %s+ only.' % (gcc_version_checked_str, clang_version_checked_str))
 
   o['variables']['enable_lto'] = b(options.enable_lto)
 
@@ -1370,6 +1389,7 @@ def configure_library(lib, output, pkgname=None):
 
 
 def configure_v8(o):
+  o['variables']['v8_enable_webassembly'] = 1
   o['variables']['v8_enable_lite_mode'] = 1 if options.v8_lite_mode else 0
   o['variables']['v8_enable_gdbjit'] = 1 if options.gdb else 0
   o['variables']['v8_no_strict_aliasing'] = 1  # Work around compiler bugs.
@@ -1886,6 +1906,7 @@ if (options.dest_os):
 flavor = GetFlavor(flavor_params)
 
 configure_node(output)
+configure_node_lib_files(output)
 configure_napi(output)
 configure_library('zlib', output)
 configure_library('http_parser', output)

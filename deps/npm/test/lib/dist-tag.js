@@ -1,5 +1,5 @@
-const mockNpm = require('../fixtures/mock-npm')
 const t = require('tap')
+const { fake: mockNpm } = require('../fixtures/mock-npm')
 
 let result = ''
 let log = ''
@@ -88,6 +88,20 @@ t.test('ls in current package', (t) => {
     t.matchSnapshot(
       result,
       'should list available tags for current package'
+    )
+    t.end()
+  })
+})
+
+t.test('ls global', (t) => {
+  t.teardown(() => {
+    config.global = false
+  })
+  config.global = true
+  distTag.exec(['ls'], (err) => {
+    t.matchSnapshot(
+      err,
+      'should throw basic usage'
     )
     t.end()
   })
